@@ -72,3 +72,21 @@ pane can still display pages.
 This branch does not modify Desktop bundles, enable unavailable browser
 backends, or claim successful browser automation. Desktop browser control in
 WSL remains unresolved.
+
+## Local Desktop integration
+
+The tested Desktop build recognizes the `CODEX_ELECTRON_RESOURCES_PATH`
+development override. A separate resource directory can supply the patched
+Linux `codex` and the matching official Windows `codex.exe`, with their
+required helpers and original resource assets. This avoids assigning a Linux
+executable to a Windows helper through the global `CODEX_CLI_PATH` override.
+
+The local resource directory preserves the original `app.asar` and Windows
+executables. Desktop's integrity checks remain enabled. A complete app restart
+is required to load the resource override; runtime smoke tests are separate
+from verification after that restart.
+
+This is a version-specific development installation. Before upgrading
+Desktop, resynchronize and validate the resources or remove the override to
+return to the bundled runtime. No modified Desktop binary or proprietary
+resource bundle is distributed by this repository.
