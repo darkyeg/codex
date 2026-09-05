@@ -9,6 +9,9 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 
 ---
 
+This maintenance branch contains [WSL interoperability fixes and validation notes](WSL_INTEROP.md).
+It does not enable Desktop browser control in WSL.
+
 ## Quickstart
 
 ### Installing and running Codex CLI

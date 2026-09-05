@@ -350,6 +350,84 @@ async fn assert_user_turn_local_image_resizes_to(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wsl_windows_image_paths_work_for_attachments_and_view_image() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    if !codex_utils_path::is_wsl() || is_remote_test_environment() {
+        return Ok(());
+    }
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build_with_auto_env(&server).await?;
+    let image_path = write_workspace_png(
+        &test,
+        "صور with spaces #%.png",
+        /*width*/ 2,
+        /*height*/ 3,
+        [20, 40, 60, 255],
+    )
+    .await?;
+    let conversion = std::process::Command::new("wslpath")
+        .arg("-w")
+        .arg(&image_path)
+        .output()?;
+    anyhow::ensure!(conversion.status.success(), "wslpath failed");
+    let windows_path = String::from_utf8(conversion.stdout)?;
+    let windows_path = windows_path.trim_end_matches(['\r', '\n']);
+    let call_id = "call-wsl-image";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    "view_image",
+                    &json!({"path": windows_path}).to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::LocalImage {
+            path: PathBuf::from(windows_path),
+            detail: None,
+        }]))
+        .await?;
+    core_test_support::wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let body = requests[0].body_json();
+    let attachment = find_image_message(&body).context("Windows attachment was not loaded")?;
+    let image_url = attachment["content"]
+        .as_array()
+        .and_then(|content| content.iter().find(|item| item["type"] == "input_image"))
+        .and_then(|item| item["image_url"].as_str())
+        .context("attachment must contain image bytes")?;
+    let encoded = image_url.split_once(',').context("image data URL")?.1;
+    let decoded = load_from_memory(&BASE64_STANDARD.decode(encoded)?)?;
+    assert_eq!(decoded.dimensions(), (2, 3));
+
+    let output = requests[1].function_call_output(call_id);
+    let tool_image_url = output["output"][0]["image_url"]
+        .as_str()
+        .context("view_image must return image bytes for a Windows path")?;
+    assert_eq!(tool_image_url, image_url);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 

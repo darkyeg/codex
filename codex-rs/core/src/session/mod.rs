@@ -3470,7 +3470,10 @@ impl Session {
 
     pub(crate) fn response_item_from_user_input(&self, input: Vec<UserInput>) -> ResponseItem {
         let mut item = ResponseItem::from(ResponseInputItem::from_user_input(
-            input,
+            input
+                .into_iter()
+                .map(crate::wsl_paths::local_image_input)
+                .collect(),
             LocalImagePreparation::Defer,
         ));
         if let ResponseItem::Message {
