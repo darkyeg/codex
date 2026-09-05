@@ -1650,6 +1650,64 @@ async fn local_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() ->
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wsl_stdio_exe_peer_receives_windows_sandbox_uri() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    if !codex_utils_path::is_wsl() || is_remote_test_environment() {
+        return Ok(());
+    }
+    let server = responses::start_mock_server().await;
+    let server_dir = tempfile::tempdir()?;
+    // The fixture echoes MCP metadata; the .exe suffix simulates the configured
+    // Windows peer without requiring a separately built Windows test binary.
+    let peer_path = server_dir.path().join("windows-peer.exe");
+    fs::copy(cargo_bin("test_stdio_server")?, &peer_path)?;
+    let fixture = test_codex()
+        .with_config(move |config| {
+            insert_mcp_server(
+                config,
+                "windows_peer",
+                stdio_transport(
+                    peer_path.to_string_lossy().into_owned(),
+                    /*env*/ None,
+                    Vec::new(),
+                ),
+                TestMcpServerOptions::default(),
+            );
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    wait_for_mcp_server(&fixture.codex, "windows_peer").await?;
+    let output = call_structured_tool(
+        &server,
+        &fixture,
+        "windows_peer",
+        "sandbox_meta",
+        "wsl-sandbox-meta",
+    )
+    .await?;
+    let actual: SandboxState =
+        serde_json::from_value(output[MCP_SANDBOX_STATE_META_CAPABILITY].clone())?;
+    let converted = StdCommand::new("wslpath")
+        .arg("-w")
+        .arg(fixture.config.cwd.as_path())
+        .output()?;
+    ensure!(converted.status.success(), "wslpath failed");
+    let converted = String::from_utf8(converted.stdout)?;
+    let expected_cwd = LegacyAppPathString::from_string(converted.trim_end_matches(['\r', '\n']))
+        .to_path_uri(codex_utils_path_uri::PathConvention::Windows)?;
+    assert_eq!(
+        actual,
+        SandboxState {
+            permission_profile: PermissionProfile::read_only(),
+            codex_linux_sandbox_exe: None,
+            sandbox_cwd: expected_cwd,
+            use_legacy_landlock: false,
+        },
+    );
+    Ok(())
+}
+
 #[test_case("rmcp", false, false, false, Some("catalog policy"), Some("native catalog policy"); "both disabled")]
 #[test_case("rmcp", true, false, false, Some("catalog policy"), Some("native catalog policy"); "auto review required")]
 #[test_case("rmcp", false, true, false, Some("catalog policy"), Some("native catalog policy"); "disabled")]

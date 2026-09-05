@@ -147,6 +147,15 @@ impl ViewImageHandler {
                 "view_image is unavailable in this session".to_string(),
             ));
         };
+        let path = if turn_environment.selection.environment_id
+            == codex_exec_server::LOCAL_ENVIRONMENT_ID
+        {
+            crate::wsl_paths::local_image_path(&path)
+                .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?
+                .into_owned()
+        } else {
+            path
+        };
         let path_uri = turn_environment.cwd().join(&path).map_err(|err| {
             FunctionCallError::RespondToModel(format!(
                 "unable to resolve image path `{path}` against environment cwd `{}`: {err}",

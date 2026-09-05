@@ -829,12 +829,22 @@ async fn augment_mcp_tool_request_meta_with_sandbox_state(
     };
     // TODO(anp): Build this metadata from the server's captured
     // TurnEnvironment::sandbox_context instead of the runtime-wide Landlock value.
-    let sandbox_state = serde_json::to_value(SandboxState {
+    let sandbox_state = SandboxState {
         permission_profile: prepared_call.permission_profile().clone(),
         codex_linux_sandbox_exe: prepared_call.config().codex_linux_sandbox_exe.clone(),
         sandbox_cwd,
         use_legacy_landlock: prepared_call.config().use_legacy_landlock,
-    })?;
+    };
+    let transport = prepared_call
+        .config()
+        .mcp_server_catalog
+        .server(prepared_call.server_name())
+        .map(|registration| &registration.config().transport);
+    let sandbox_state = serde_json::to_value(crate::wsl_paths::sandbox_state(
+        sandbox_state,
+        transport,
+        server_environment_id,
+    )?)?;
 
     match meta.as_mut() {
         Some(serde_json::Value::Object(map)) => {
