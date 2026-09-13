@@ -7,6 +7,9 @@ pub use remote_mutations::RemotePluginInstallRequest;
 pub use remote_mutations::RemotePluginOperationError;
 pub use remote_mutations::RemotePluginOperationErrorKind;
 pub use remote_mutations::RemotePluginUninstallOutcome;
+#[path = "installed_listing.rs"]
+mod installed_listing;
+use installed_listing::MarketplaceListing;
 #[path = "marketplace_context.rs"]
 mod marketplace_context;
 pub use marketplace_context::PluginMarketplaceContext;
@@ -55,6 +58,7 @@ use crate::marketplace::find_installable_marketplace_plugin;
 use crate::marketplace::find_marketplace_plugin;
 use crate::marketplace::home_dir;
 use crate::marketplace::list_marketplaces_with_home;
+use crate::marketplace::list_marketplaces_with_home_selected;
 use crate::marketplace::plugin_interface_with_marketplace_category;
 use crate::marketplace_policy::MarketplacePolicy;
 use crate::marketplace_policy::configured_plugins_from_stack;
@@ -2349,6 +2353,7 @@ impl PluginsManager {
             additional_roots,
             include_openai_curated,
             &plugin_states,
+            MarketplaceListing::All,
         )
     }
 
@@ -2358,11 +2363,25 @@ impl PluginsManager {
         additional_roots: &[AbsolutePathBuf],
         include_openai_curated: bool,
         plugin_states: &ConfiguredPluginStates,
+        listing: MarketplaceListing<'_>,
     ) -> Result<ConfiguredMarketplaceListOutcome, MarketplaceError> {
         let excluded_plugin_ids = self.excluded_bundled_plugin_ids(config);
         let marketplace_roots =
             self.marketplace_roots(config, additional_roots, include_openai_curated);
-        let marketplace_outcome = self.list_marketplaces_with_policy(config, &marketplace_roots)?;
+        let mut marketplace_outcome = list_marketplaces_with_home_selected(
+            &marketplace_roots,
+            home_dir().as_deref(),
+            &|marketplace_name, plugin_name| match listing {
+                MarketplaceListing::All => true,
+                MarketplaceListing::InstalledAndSuggested { suggested_names } => {
+                    suggested_names.contains(plugin_name)
+                        || plugin_states
+                            .installed
+                            .contains(&format!("{plugin_name}@{marketplace_name}"))
+                }
+            },
+        )?;
+        self.retain_allowed_marketplaces(config, &mut marketplace_outcome);
         let mut seen_plugin_keys = HashSet::new();
         let marketplaces = marketplace_outcome
             .marketplaces
@@ -3568,6 +3587,15 @@ impl PluginsManager {
         roots: &[AbsolutePathBuf],
     ) -> Result<MarketplaceListOutcome, MarketplaceError> {
         let mut outcome = list_marketplaces_with_home(roots, home_dir().as_deref())?;
+        self.retain_allowed_marketplaces(config, &mut outcome);
+        Ok(outcome)
+    }
+
+    fn retain_allowed_marketplaces(
+        &self,
+        config: &PluginsConfigInput,
+        outcome: &mut MarketplaceListOutcome,
+    ) {
         let policy = MarketplacePolicy::from_requirements(config.config_layer_stack.requirements());
         outcome.marketplaces.retain(|marketplace| {
             policy
@@ -3579,7 +3607,6 @@ impl PluginsManager {
                 )
                 .is_ok()
         });
-        Ok(outcome)
     }
 }
 

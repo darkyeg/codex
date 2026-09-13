@@ -35,6 +35,15 @@ impl PluginMarketplaceContext {
         manager: &PluginsManager,
         include_openai_curated: bool,
     ) -> Result<ConfiguredMarketplaceListOutcome, MarketplaceError> {
+        self.list_marketplaces_selected(manager, include_openai_curated, MarketplaceListing::All)
+    }
+
+    pub(super) fn list_marketplaces_selected(
+        &self,
+        manager: &PluginsManager,
+        include_openai_curated: bool,
+        listing: MarketplaceListing<'_>,
+    ) -> Result<ConfiguredMarketplaceListOutcome, MarketplaceError> {
         let mut plugin_states = ConfiguredPluginStates::default();
         for scope in self
             .scopes
@@ -68,6 +77,7 @@ impl PluginMarketplaceContext {
                 scope.cwd.as_slice(),
                 include_openai_curated,
                 &plugin_states,
+                listing,
             )?;
             for mut marketplace in outcome.marketplaces {
                 if !seen_marketplace_paths.insert(marketplace.path.clone()) {

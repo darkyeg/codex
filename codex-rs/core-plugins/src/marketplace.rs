@@ -368,10 +368,21 @@ fn marketplace_root_from_layout(marketplace_path: &Path, relative_path: &str) ->
 }
 
 pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, MarketplaceError> {
+    load_marketplace_selected(path, &|_, _| true)
+}
+
+fn load_marketplace_selected(
+    path: &AbsolutePathBuf,
+    select: &dyn Fn(&str, &str) -> bool,
+) -> Result<Marketplace, MarketplaceError> {
     let marketplace = load_raw_marketplace_manifest(path)?;
     let mut plugins = Vec::new();
 
     for plugin in marketplace.plugins {
+        // Select by catalog identity before reading the plugin's local files.
+        if !select(&marketplace.name, &plugin.name) {
+            continue;
+        }
         let plugin = match resolve_marketplace_plugin_entry(path, &marketplace.name, plugin) {
             Ok(Some(plugin)) => plugin,
             Ok(None) => continue,
@@ -424,10 +435,18 @@ pub fn list_marketplaces_with_home(
     additional_roots: &[AbsolutePathBuf],
     home_dir: Option<&Path>,
 ) -> Result<MarketplaceListOutcome, MarketplaceError> {
+    list_marketplaces_with_home_selected(additional_roots, home_dir, &|_, _| true)
+}
+
+pub(crate) fn list_marketplaces_with_home_selected(
+    additional_roots: &[AbsolutePathBuf],
+    home_dir: Option<&Path>,
+    select: &dyn Fn(&str, &str) -> bool,
+) -> Result<MarketplaceListOutcome, MarketplaceError> {
     let mut outcome = MarketplaceListOutcome::default();
 
     for marketplace_path in discover_marketplace_paths_from_roots(additional_roots, home_dir) {
-        match load_marketplace(&marketplace_path) {
+        match load_marketplace_selected(&marketplace_path, select) {
             Ok(marketplace) => outcome.marketplaces.push(marketplace),
             Err(err) => {
                 warn!(

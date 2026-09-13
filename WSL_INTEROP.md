@@ -28,6 +28,26 @@ The image/MCP boundary conversion lives in `codex-rs/core/src/wsl_paths.rs`;
 project input conversion lives in `codex-rs/app-server/src/project_paths.rs`.
 Neither changes the MCP wire schema, model confirmation policies, or approval decisions.
 
+## Installed-plugin startup
+
+`plugin/installed` selects installed identities and explicit suggestions before
+hydrating catalog entries from local plugin manifests. Previously it hydrated
+all entries and discarded unrelated plugins afterward. This matters on WSL's
+Windows filesystem and for large catalogs; the fix applies on every platform.
+Catalog JSON admission, policy restrictions, scope precedence, installed state,
+and remote plugin reconciliation remain in their existing owners. Catalog
+browsing and installation still use the complete catalog. No persistent metadata
+cache or stale-data fallback is introduced.
+
+On the same NixOS/Windows data, two isolated `plugin/installed` requests under
+`strace -f -c` fell from 7.817/9.316 seconds to 1.440/1.069 seconds. Both runs
+returned the same marketplace/plugin counts (3 marketplaces, 12 then 13 plugins
+as background reconciliation completed), with no catalog errors. `statx` calls
+fell from 2,918 to 321. These measurements isolate the server query; they do not
+establish the total Desktop conversation-open latency. The selected 57 API
+regressions passed, including catalog browsing, suggestions, policy restrictions,
+remote reconciliation, and plugin state merged across project scopes.
+
 ## Shared Windows/WSL configuration
 
 Both the WSL agent and native Windows tool helpers may load the same Codex

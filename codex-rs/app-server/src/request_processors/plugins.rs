@@ -896,8 +896,10 @@ impl PluginRequestProcessor {
         let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(config)?;
         let context = context.clone();
         match tokio::task::spawn_blocking(move || {
-            let outcome = plugins_manager
-                .list_marketplaces_for_context(&context, /*include_openai_curated*/ true)?;
+            let outcome = plugins_manager.list_installed_and_suggested_plugins_for_context(
+                &context,
+                &install_suggestion_plugin_names,
+            )?;
             Ok::<
                 (
                     Vec<PluginMarketplaceEntry>,
