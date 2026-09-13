@@ -135,6 +135,61 @@ async fn resolves_archived_ancestors() {
 }
 
 #[tokio::test]
+async fn cached_ancestor_locations_follow_moves_and_recheck_history() {
+    let home = TempDir::new().expect("temp dir");
+    let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+    let root = ThreadId::default();
+    let child = ThreadId::default();
+    let root_path = write_rollout(
+        home.path(),
+        root,
+        /*history_base*/ None,
+        /*next_ordinal*/ 3,
+    );
+    let root_end = history_position(root_path.as_path(), root, /*end_ordinal_exclusive*/ 3);
+    write_rollout(home.path(), child, Some(root_end), /*next_ordinal*/ 2);
+    let mut expected = store
+        .resolve_rollout_lineage(child)
+        .await
+        .expect("warm ancestor location");
+    assert_eq!(
+        store
+            .resolve_rollout_lineage(child)
+            .await
+            .expect("cached lineage"),
+        expected
+    );
+
+    let archived = home.path().join("archived_sessions");
+    fs::create_dir_all(&archived).expect("create archive");
+    let archived_path = archived.join(root_path.file_name().expect("rollout filename"));
+    fs::rename(&root_path, &archived_path).expect("archive outside the store");
+    expected.segments[0].rollout_path = archived_path.clone();
+    assert_eq!(
+        store
+            .resolve_rollout_lineage(child)
+            .await
+            .expect("rediscover archived ancestor"),
+        expected
+    );
+
+    let bytes = fs::read(&archived_path).expect("read ancestor");
+    fs::write(&archived_path, b"invalid metadata\n").expect("replace metadata");
+    assert!(store.resolve_rollout_lineage(child).await.is_err());
+    fs::remove_file(&archived_path).expect("delete ancestor");
+    assert_invalid_lineage(&store, child, "missing source rollout").await;
+    fs::write(&root_path, bytes).expect("restore ancestor after a missing lookup");
+    expected.segments[0].rollout_path = root_path;
+    assert_eq!(
+        store
+            .resolve_rollout_lineage(child)
+            .await
+            .expect("rediscover restored ancestor"),
+        expected
+    );
+}
+
+#[tokio::test]
 async fn resolves_lineage_at_explicit_history_position() {
     let home = TempDir::new().expect("temp dir");
     let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);

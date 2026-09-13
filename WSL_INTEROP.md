@@ -72,6 +72,30 @@ skills. Initial combined tool startup remained 24.039 versus 28.109 seconds;
 this change does not establish an improvement to initial startup. Total Desktop
 loading latency must still be measured after installation and restart.
 
+## History page loading
+
+Paginated fork history follows immutable ancestor rollout IDs. The local store
+keeps a bounded cache of their discovered file locations, shared by its clones,
+so consecutive turn/item pages do not scan the session directories repeatedly.
+Every hit checks the file; missing or moved locations use the existing discovery
+path. Metadata, history cutoffs, and reference path checks are still evaluated on
+every read. The current rollout selected for a task remains resolved through the
+live writer and SQLite, preserving revert behavior. No task content is cached or
+removed by this optimization.
+
+After a restart and with compilation stopped, a sequential old/new API comparison
+reduced loading ten full turns (511 items) from 5.804 to 1.964 seconds. The complete
+JSON responses matched for full, summary, and unloaded item views. All 256 local
+thread-store tests passed, including archive, compression, revert, and lineage
+validation. These API timings are separate from total Desktop startup latency.
+
+The local Playwright installation now starts the pinned `@playwright/mcp@0.0.80`
+entry point directly instead of invoking npm on each connection. The package and
+its dependencies are copied into a persistent versioned tool directory; Edge,
+`--sandbox`, `--isolated`, and all 24 tools are retained. A process-local comparison
+measured 19.128 seconds through npm versus 3.048 seconds with the direct entry point;
+the final installed package also passed its MCP startup check.
+
 ## Shared Windows/WSL configuration
 
 Both the WSL agent and native Windows tool helpers may load the same Codex

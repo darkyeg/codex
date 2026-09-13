@@ -15,6 +15,7 @@ mod rollout_migration;
 // This lands before the reader PRs that consume the shared lineage resolver.
 #[allow(dead_code)]
 mod rollout_lineage;
+mod rollout_path_cache;
 mod search_threads;
 mod thread_attachments;
 mod thread_history;
@@ -142,6 +143,7 @@ pub struct LocalThreadStore {
     writer_lock_coordinator: Arc<WriterLockCoordinator>,
     state_db: Option<StateDbHandle>,
     thread_history_db: Arc<OnceCell<sqlx::SqlitePool>>,
+    rollout_path_cache: Arc<rollout_path_cache::RolloutPathCache>,
 }
 
 type WriterLockGuard = Arc<codex_rollout::WriterLockGuard>;
@@ -257,6 +259,7 @@ impl LocalThreadStore {
             writer_lock_coordinator,
             state_db,
             thread_history_db: Arc::new(OnceCell::new()),
+            rollout_path_cache: Arc::new(rollout_path_cache::RolloutPathCache::default()),
         }
     }
 
