@@ -499,18 +499,20 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         };
     }
 
+    // Auth discovery is read-only status work, not a prerequisite for starting connections.
+    // In particular, a slow HTTP discovery endpoint must not delay unrelated stdio servers.
     let auth_status_entries = compute_auth_statuses(
         mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
         config.auth_keyring_backend_kind,
         auth,
         &runtime_context,
-    )
-    .await;
+    );
 
     let server_names = mcp_servers.keys().cloned().collect();
 
     let cancel_token = CancellationToken::new();
+    let _cancel_on_drop = cancel_token.clone().drop_guard();
     let runtime_config = config.for_threadless_operations(&mcp_servers);
     let mcp_connection_manager = McpConnectionSet::new(
         /*previous*/ None,
@@ -520,11 +522,11 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
             config: Arc::new(runtime_config),
             plugins_available: false,
             ready_selected_capability_roots: Vec::new(),
-            mcp_servers,
+            mcp_servers: mcp_servers.clone(),
             submit_id,
             tx_event: None,
             startup_cancellation_token: cancel_token.clone(),
-            runtime_context,
+            runtime_context: runtime_context.clone(),
             codex_apps_tools_cache,
             tool_catalog_cache,
             codex_apps_tools_cache_key: connector_runtime_context_key(auth),
@@ -535,8 +537,9 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
             elicitation_lifecycle: None,
         },
         crate::elicitation::ElicitationRequestRouter::default(),
-    )
-    .await;
+    );
+    let (auth_status_entries, mcp_connection_manager) =
+        tokio::join!(auth_status_entries, mcp_connection_manager);
 
     let snapshot = collect_mcp_server_status_snapshot_from_manager(
         &mcp_connection_manager,

@@ -746,13 +746,13 @@ impl DirectFileSystem {
             root.clone()
         };
         let mut outcome = WalkOutcome::default();
-        let mut queue = VecDeque::from([(root.clone(), 0usize)]);
+        let mut queue = VecDeque::from([(root.clone(), root_identity.clone(), 0usize)]);
         let mut visited_directories = HashSet::from([root_identity]);
         let mut directory_count = 1usize;
         let mut entry_count = 0usize;
         let mut response_bytes = 0usize;
 
-        while let Some((directory, depth)) = queue.pop_front() {
+        while let Some((directory, parent_identity, depth)) = queue.pop_front() {
             let entries = walk_read_directory(&directory, cancelled);
             check_walk_cancelled(cancelled)?;
             let mut entries = match entries {
@@ -769,9 +769,10 @@ impl DirectFileSystem {
                     continue;
                 }
             };
-            entries.sort();
+            entries.sort_by(|left, right| left.file_name.cmp(&right.file_name));
 
-            for file_name in entries {
+            for entry in entries {
+                let file_name = entry.file_name;
                 check_walk_cancelled(cancelled)?;
                 if entry_count == options.max_entries {
                     outcome.truncated = true;
@@ -793,7 +794,12 @@ impl DirectFileSystem {
                         continue;
                     }
                 };
-                let (metadata, is_symlink) = match walk_metadata(&path) {
+                let metadata = match entry.file_type {
+                    Some(file_type) => Ok((file_type, false)),
+                    None => walk_metadata(&path)
+                        .map(|(metadata, is_symlink)| (metadata.file_type(), is_symlink)),
+                };
+                let (file_type, is_symlink) = match metadata {
                     Ok(metadata) => metadata,
                     Err(error) => {
                         if !push_walk_error(
@@ -807,13 +813,13 @@ impl DirectFileSystem {
                         continue;
                     }
                 };
-                if is_symlink && (!options.follow_directory_symlinks || !metadata.is_dir()) {
+                if is_symlink && (!options.follow_directory_symlinks || !file_type.is_dir()) {
                     continue;
                 }
 
-                let kind = if metadata.is_dir() {
+                let kind = if file_type.is_dir() {
                     WalkEntryKind::Directory
-                } else if metadata.is_file() {
+                } else if file_type.is_file() {
                     WalkEntryKind::File
                 } else {
                     continue;
@@ -836,7 +842,15 @@ impl DirectFileSystem {
                     }
                     let directory_identity = if options.follow_directory_symlinks {
                         check_walk_cancelled(cancelled)?;
-                        match walk_canonicalize(&path) {
+                        // On Unix, an ordinary child of a canonical directory is already
+                        // canonical. Resolve links themselves, without resolving every ancestor
+                        // again for every child. Windows reparse points keep full resolution.
+                        let identity = if cfg!(unix) && !is_symlink {
+                            parent_identity.join(&file_name).map_err(io::Error::other)
+                        } else {
+                            walk_canonicalize(&path)
+                        };
+                        match identity {
                             Ok(path) => path,
                             Err(error) => {
                                 if !push_walk_error(
@@ -853,14 +867,14 @@ impl DirectFileSystem {
                     } else {
                         path.clone()
                     };
-                    if !visited_directories.insert(directory_identity) {
+                    if !visited_directories.insert(directory_identity.clone()) {
                         continue;
                     }
                     if directory_count == options.max_directories {
                         outcome.truncated = true;
                     } else {
                         directory_count += 1;
-                        queue.push_back((path, depth + 1));
+                        queue.push_back((path, directory_identity, depth + 1));
                     }
                 }
             }
@@ -1091,7 +1105,15 @@ fn walk_canonicalize(path: &PathUri) -> io::Result<PathUri> {
     Ok(PathUri::from_abs_path(&canonicalized))
 }
 
-fn walk_read_directory(path: &PathUri, cancelled: &CancellationToken) -> io::Result<Vec<String>> {
+struct WalkDirectoryEntry {
+    file_name: String,
+    file_type: Option<std::fs::FileType>,
+}
+
+fn walk_read_directory(
+    path: &PathUri,
+    cancelled: &CancellationToken,
+) -> io::Result<Vec<WalkDirectoryEntry>> {
     check_walk_cancelled(cancelled)?;
     let path = path.to_abs_path()?;
     let mut entries = Vec::new();
@@ -1108,7 +1130,17 @@ fn walk_read_directory(path: &PathUri, cancelled: &CancellationToken) -> io::Res
                 continue;
             }
         }
-        entries.push(entry.file_name().to_string_lossy().into_owned());
+        let file_name = entry.file_name();
+        // Unix directory entries already carry the type needed by this inventory. Keep
+        // metadata probes for links, Windows reparse points, and lossy names whose emitted
+        // PathUri must still be checked. A walk is not a filesystem snapshot; callers that
+        // subsequently open an entry must continue handling replacement or removal.
+        let cached_type = (cfg!(unix) && !file_type.is_symlink() && file_name.to_str().is_some())
+            .then_some(file_type);
+        entries.push(WalkDirectoryEntry {
+            file_name: file_name.to_string_lossy().into_owned(),
+            file_type: cached_type,
+        });
     }
     Ok(entries)
 }

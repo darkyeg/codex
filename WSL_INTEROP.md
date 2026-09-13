@@ -122,6 +122,56 @@ image returned identical PNG hashes to both clients while selecting inline displ
 only for Desktop. The installed project, sandbox, and no-op cache checks also
 passed. Final visual confirmation requires restarting Desktop into this runtime.
 
+## Task-opening latency follow-up
+
+The active history runtime still showed 21–27 second `thread/resume` requests,
+13-second skill refreshes, and 13–27 second MCP status requests after reboot,
+without competing compiler processes. Faster history paging did not establish
+that Desktop task opening was fixed.
+
+The next change removes two independent startup costs:
+
+- Unix filesystem walks retain ordinary directory-entry types and carry each
+  resolved parent identity into its children. Directory symlinks still resolve
+  their targets and share the visited set. Windows reparse points retain full
+  metadata and canonicalization probes. Lossy filenames retain their existing
+  metadata/error path. BFS ordering, hidden-directory pruning, cancellation,
+  response/traversal bounds, and sandbox routing are unchanged. This is a live
+  inventory, not an atomic filesystem snapshot; subsequent opens must still
+  handle removal or replacement.
+- Threadless MCP status collection runs read-only authentication discovery and
+  connection startup concurrently. It still waits for live metadata and the
+  authentication results before returning. A cancellation guard stops startup
+  if the request future is dropped. It does not cache successful status across
+  requests or disable integrations.
+
+A controlled HTTP discovery endpoint waits for an independent stdio process to
+start. The installed history runtime serializes them, times out after roughly
+five seconds, and reports unknown authentication status. The regression requires
+both the stdio tool inventory and the valid discovered login status.
+
+Validation passed: 17 filesystem-walk tests, 13 skill-discovery tests, one MCP
+status-mapping test, and 33 selected app-server API checks. The packaged executable
+also passed the ten WSL project smoke checks, no-op cache behavior, sandbox
+read/write checks, and the controlled startup regression (5.183 seconds with
+unknown auth on the old runtime; 0.440 seconds with valid auth on the replacement).
+
+Sequential measurements after compilation finished used the same installed
+catalog. Both full inventories contained 48 identical name/path/enablement
+records and no errors. The first responses contained only 15 skills while the
+remote installed-plugin catalog was still arriving; those are not the full-scan
+comparison. The subsequent forced full refresh fell from 15.674 to 4.334 seconds.
+The combined plugin/skills/MCP startup sequence fell from 18.790 to 9.039 seconds;
+its warm repeated feature-update/skills request was essentially unchanged
+(2.839 versus 2.857 seconds). These measure backend requests, not complete Desktop
+navigation or network-independent guarantees.
+
+The replacement is `wsl-interop-main-1715e550-io-startup`. It preserves all five
+original Desktop/Windows asset hashes and pins its Nix runtime closure. No CPU,
+RAM, swap, or build-job limits were added. Desktop must start a new process through
+the updated launcher to load the replacement; the running history process is
+left intact. Full visual task-opening latency still requires a Desktop trial.
+
 ## Shared Windows/WSL configuration
 
 Both the WSL agent and native Windows tool helpers may load the same Codex

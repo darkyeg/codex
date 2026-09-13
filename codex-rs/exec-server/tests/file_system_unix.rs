@@ -840,6 +840,67 @@ async fn file_system_walk_handles_directory_symlinks(
     Ok(())
 }
 
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_walk_deduplicates_nested_targets_below_directory_aliases(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    let context = create_file_system_context(implementation).await?;
+    let file_system = context.file_system;
+    let tmp = TempDir::new()?;
+    let root = tmp.path().join("root");
+    let real = root.join("real");
+    let nested = real.join("nested");
+    let root_alias = tmp.path().join("root-alias");
+    std::fs::create_dir_all(&nested)?;
+    std::fs::write(nested.join("note.txt"), "nested target")?;
+    symlink(&real, root.join("a-alias"))?;
+    symlink(&nested, nested.join("loop"))?;
+    symlink(&root, &root_alias)?;
+
+    for root in [&root, &root_alias] {
+        let outcome = file_system
+            .walk(
+                &PathUri::from_host_native_path(root)?,
+                WalkOptions {
+                    max_depth: 6,
+                    max_directories: 3,
+                    max_entries: 5,
+                    follow_directory_symlinks: true,
+                    prune_hidden_directories: false,
+                },
+                /*sandbox*/ None,
+            )
+            .await
+            .with_context(|| format!("mode={implementation}"))?;
+        let entries = [
+            ("a-alias", WalkEntryKind::Directory),
+            ("real", WalkEntryKind::Directory),
+            ("a-alias/nested", WalkEntryKind::Directory),
+            ("a-alias/nested/loop", WalkEntryKind::Directory),
+            ("a-alias/nested/note.txt", WalkEntryKind::File),
+        ]
+        .into_iter()
+        .map(|(path, kind)| {
+            Ok(WalkEntry {
+                path: PathUri::from_host_native_path(root.join(path))?,
+                kind,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+        assert_eq!(
+            outcome,
+            WalkOutcome {
+                entries,
+                errors: Vec::new(),
+                truncated: false,
+            }
+        );
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[test_case(FileSystemImplementation::Local ; "local")]
 #[test_case(FileSystemImplementation::Remote ; "remote")]

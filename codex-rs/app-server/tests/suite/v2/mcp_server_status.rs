@@ -69,6 +69,90 @@ use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[tokio::test]
+async fn mcp_server_status_starts_stdio_while_http_auth_discovery_is_pending() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    let pid_file = codex_home.path().join("mcp.pid");
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let discovery_url = format!("http://{}", listener.local_addr()?);
+    let metadata = json!({
+        "issuer": format!("{discovery_url}/mcp"),
+        "authorization_endpoint": format!("{discovery_url}/authorize"),
+        "token_endpoint": format!("{discovery_url}/token"),
+    });
+    let discovery_pid_file = pid_file.clone();
+    let router = Router::new().route(
+        "/.well-known/oauth-authorization-server/mcp",
+        get(move || {
+            let pid_file = discovery_pid_file.clone();
+            let metadata = metadata.clone();
+            async move {
+                // Discovery can complete only after the independent stdio process starts.
+                // Serial startup times out discovery and loses its valid login status.
+                while !tokio::fs::try_exists(&pid_file).await.unwrap_or(false) {
+                    sleep(Duration::from_millis(10)).await;
+                }
+                Json(metadata)
+            }
+        }),
+    );
+    let discovery_handle = tokio::spawn(async move { axum::serve(listener, router).await });
+    mock_responses_config(&server.uri())
+        .with_extra_config(&format!(
+            r#"[mcp_servers.slow-discovery]
+url = "{discovery_url}/mcp"
+
+[mcp_servers.independent-stdio]
+command = {}
+enabled_tools = ["echo"]
+
+[mcp_servers.independent-stdio.env]
+MCP_TEST_PID_FILE = {}
+"#,
+            toml::Value::String(stdio_server_bin()?),
+            toml::Value::String(pid_file.to_string_lossy().into_owned()),
+        ))
+        .write(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized()
+        .await?;
+    let request_id = mcp
+        .send_list_mcp_server_status_request(ListMcpServerStatusParams {
+            cursor: None,
+            limit: None,
+            detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+            thread_id: None,
+        })
+        .await?;
+    let response: ListMcpServerStatusResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    discovery_handle.abort();
+    let _ = discovery_handle.await;
+
+    let statuses = response
+        .data
+        .into_iter()
+        .map(|status| (status.name, (status.auth_status, status.tools.len())))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        statuses,
+        BTreeMap::from([
+            (
+                "independent-stdio".to_string(),
+                (codex_app_server_protocol::McpAuthStatus::Unsupported, 1),
+            ),
+            (
+                "slow-discovery".to_string(),
+                (codex_app_server_protocol::McpAuthStatus::NotLoggedIn, 0),
+            ),
+        ])
+    );
+    Ok(())
+}
+
 #[test_case(false, None, None, None, true; "legacy callback")]
 #[test_case(
     false,
