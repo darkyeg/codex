@@ -216,8 +216,12 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
     Ok(())
 }
 
+#[test_case::test_case("imagegen-test"; "native_paths")]
+#[test_case::test_case("Codex Desktop"; "wsl_desktop_inline")]
 #[tokio::test]
-async fn transparent_image_preserves_output_metadata_and_persisted_history() -> Result<()> {
+async fn transparent_image_preserves_output_metadata_and_persisted_history(
+    client_name: &str,
+) -> Result<()> {
     let call_id = "transparent-image-run-1";
     let server = responses::start_mock_server().await;
     mount_image_response_with_background(&server, "transparent").await;
@@ -251,9 +255,15 @@ async fn transparent_image_preserves_output_metadata_and_persisted_history() -> 
     )?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .with_env_overrides(&[("OPENAI_API_KEY", None)])
-        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .with_env_overrides(&[("OPENAI_API_KEY", None), ("WSL_DISTRO_NAME", Some("NixOS"))])
+        .build()
         .await?;
+    mcp.initialize_with_client_info(codex_app_server_protocol::ClientInfo {
+        name: client_name.to_string(),
+        title: None,
+        version: "1".to_string(),
+    })
+    .await?;
     start_image_generation_turn(&mut mcp, ThreadStartParams::default()).await?;
 
     let completed = timeout(
@@ -271,6 +281,7 @@ async fn transparent_image_preserves_output_metadata_and_persisted_history() -> 
         status,
         result,
         transparent_background,
+        saved_path,
         ..
     }) = completed.item
     else {
@@ -279,6 +290,21 @@ async fn transparent_image_preserves_output_metadata_and_persisted_history() -> 
     assert_eq!(status, "completed");
     assert_eq!(result, RESULT);
     assert_eq!(transparent_background, Some(true));
+    let artifact_path = codex_home
+        .path()
+        .join("generated_images")
+        .join(&thread_id)
+        .join(format!("{call_id}.png"));
+    assert_eq!(std::fs::read(&artifact_path)?, TINY_PNG_BYTES);
+    let expected_live_path = if cfg!(target_os = "linux") && client_name == "Codex Desktop" {
+        None
+    } else {
+        Some(artifact_path.as_path())
+    };
+    assert_eq!(
+        saved_path.as_ref().map(|path| path.as_path()),
+        expected_live_path
+    );
 
     drop(mcp);
     let mut resumed = TestAppServer::builder()
@@ -304,6 +330,14 @@ async fn transparent_image_preserves_output_metadata_and_persisted_history() -> 
         })
         .context("persisted legacy history should contain the generated image")?;
     assert_eq!(persisted_image.transparent_background, Some(true));
+    assert_eq!(
+        persisted_image
+            .saved_path
+            .as_ref()
+            .map(|path| path.as_path()),
+        Some(artifact_path.as_path())
+    );
+    assert_eq!(persisted_image.result, RESULT);
 
     let resume_id = resumed
         .send_thread_resume_request(ThreadResumeParams {

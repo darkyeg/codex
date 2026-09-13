@@ -68,6 +68,7 @@ impl ConnectionState {
 }
 
 pub(crate) struct OutboundConnectionState {
+    pub(crate) session: Option<Arc<ConnectionSessionState>>,
     pub(crate) initialized: Arc<AtomicBool>,
     pub(crate) experimental_api_enabled: Arc<AtomicBool>,
     pub(crate) opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
@@ -84,6 +85,7 @@ impl OutboundConnectionState {
         disconnect_sender: Option<CancellationToken>,
     ) -> Self {
         Self {
+            session: None,
             initialized,
             experimental_api_enabled,
             opted_out_notification_methods,
@@ -186,7 +188,7 @@ fn filter_outgoing_message_for_connection(
     let experimental_api_enabled = connection_state
         .experimental_api_enabled
         .load(Ordering::Acquire);
-    match message {
+    let mut message = match message {
         OutgoingMessage::Request(ServerRequest::CommandExecutionRequestApproval {
             request_id,
             mut params,
@@ -200,7 +202,11 @@ fn filter_outgoing_message_for_connection(
             })
         }
         _ => message,
+    };
+    if let Some(session) = &connection_state.session {
+        crate::desktop_image_media::prepare_generated_images(&mut message, session);
     }
+    message
 }
 
 pub(crate) async fn route_outgoing_envelope(

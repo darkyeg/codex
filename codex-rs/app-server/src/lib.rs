@@ -108,6 +108,7 @@ mod connection_cleanup;
 mod connection_rpc_gate;
 mod current_time;
 mod daemon_thread_recovery;
+mod desktop_image_media;
 mod dynamic_tools;
 mod effective_plugin_change;
 mod error_code;
@@ -183,6 +184,7 @@ enum OutboundControlEvent {
         initialized: Arc<AtomicBool>,
         experimental_api_enabled: Arc<AtomicBool>,
         opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
+        session: Arc<crate::message_processor::ConnectionSessionState>,
     },
     /// Remove state for a closed/disconnected connection.
     Closed { connection_id: ConnectionId },
@@ -903,16 +905,19 @@ pub async fn run_main_with_transport_options(
                                 initialized,
                                 experimental_api_enabled,
                                 opted_out_notification_methods,
+                                session,
                             } => {
+                                let mut connection = OutboundConnectionState::new(
+                                    writer,
+                                    initialized,
+                                    experimental_api_enabled,
+                                    opted_out_notification_methods,
+                                    disconnect_sender,
+                                );
+                                connection.session = Some(session);
                                 outbound_connections.insert(
                                     connection_id,
-                                    OutboundConnectionState::new(
-                                        writer,
-                                        initialized,
-                                        experimental_api_enabled,
-                                        opted_out_notification_methods,
-                                        disconnect_sender,
-                                    ),
+                                    connection,
                                 );
                             }
                             OutboundControlEvent::Closed { connection_id } => {
@@ -1098,6 +1103,13 @@ pub async fn run_main_with_transport_options(
                                     Arc::new(AtomicBool::new(false));
                                 let outbound_opted_out_notification_methods =
                                     Arc::new(RwLock::new(HashSet::new()));
+                                let connection = ConnectionState::new(
+                                    origin,
+                                    auth,
+                                    Arc::clone(&outbound_initialized),
+                                    Arc::clone(&outbound_experimental_api_enabled),
+                                    Arc::clone(&outbound_opted_out_notification_methods),
+                                );
                                 if outbound_control_tx
                                     .send(OutboundControlEvent::Opened {
                                         connection_id,
@@ -1110,6 +1122,7 @@ pub async fn run_main_with_transport_options(
                                         opted_out_notification_methods: Arc::clone(
                                             &outbound_opted_out_notification_methods,
                                         ),
+                                        session: Arc::clone(&connection.session),
                                     })
                                     .await
                                     .is_err()
@@ -1118,13 +1131,7 @@ pub async fn run_main_with_transport_options(
                                 }
                                 connections.insert(
                                     connection_id,
-                                    ConnectionState::new(
-                                        origin,
-                                        auth,
-                                        outbound_initialized,
-                                        outbound_experimental_api_enabled,
-                                        outbound_opted_out_notification_methods,
-                                    ),
+                                    connection,
                                 );
                             }
                             TransportEvent::ConnectionClosed { connection_id } => {

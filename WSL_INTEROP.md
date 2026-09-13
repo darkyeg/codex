@@ -96,6 +96,32 @@ its dependencies are copied into a persistent versioned tool directory; Edge,
 measured 19.128 seconds through npm versus 3.048 seconds with the direct entry point;
 the final installed package also passed its MCP startup check.
 
+## Generated image previews on Windows Desktop with WSL
+
+Desktop 26.908.4834.0 prefers an image's saved path over its inline result and
+uses a native Windows file URL for the local host. A WSL executor path therefore
+fails to preview, even when the generated PNG and inline image are intact.
+
+The app-server transport selects the existing inline-image display fallback for
+initialized `Codex Desktop` clients on local stdio connections inside WSL. It
+clears the optional saved-path hint only on each outgoing image item that has an
+inline result. Live notifications, resumed turns, and paginated history use the
+same policy. Other clients, stored history, the original PNG, and model-facing
+path hints retain their native paths. Empty results retain their saved-path hint.
+
+This compatibility installation keeps `omit_app_server_notification_media` false
+so newly generated images include their display data. No Desktop bundle or
+integrity check is modified. A future Desktop fix can restore native path hints
+once its local image preview routes WSL paths through the executor filesystem.
+
+Verification covered 61 distinct app-server checks across the selected API and
+transport suite and the corrected image serializer fixtures. The new generation
+case passed for both ordinary and Desktop clients, including PNG bytes and
+persisted native paths. An installed-runtime read of an existing 1,244,304-byte
+image returned identical PNG hashes to both clients while selecting inline display
+only for Desktop. The installed project, sandbox, and no-op cache checks also
+passed. Final visual confirmation requires restarting Desktop into this runtime.
+
 ## Shared Windows/WSL configuration
 
 Both the WSL agent and native Windows tool helpers may load the same Codex
