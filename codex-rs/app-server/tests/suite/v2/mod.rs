@@ -87,6 +87,8 @@ mod plugin_search;
 mod plugin_share;
 mod plugin_uninstall;
 mod process_exec;
+#[cfg(target_os = "linux")]
+mod project_wsl_paths;
 mod projects;
 mod rate_limit_reset_credits;
 mod rate_limits;

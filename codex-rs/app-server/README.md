@@ -224,3 +224,18 @@ Existing rollouts may contain historical `ThreadRolledBack` events. Their replay
 and migration remain supported so resuming, reading, and forking those threads
 preserves the surviving history. This disk compatibility does not require restoring
 support for new `thread/rollback` requests.
+
+## WSL project roots (maintenance build)
+
+A Linux app server with `WSL_DISTRO_NAME` set accepts
+`\\wsl$\<distribution>\...` and `\\wsl.localhost\<distribution>\...`
+in `roots[].path` for `project/create`, `project/import`, and `project/update`.
+Host and distribution aliases allow ASCII case differences; Linux path
+components retain their case. Forward-slash UNC spellings and Windows
+device-namespace UNC aliases are also accepted.
+
+Only the current distribution is translated, before native absolute-path
+validation. Missing or different distributions return an invalid-params error.
+Stored roots and response roots use Linux paths. Other methods, metadata,
+Windows drive paths, other network shares, and non-WSL servers retain their
+existing behavior. Clients remain responsible for their own sidebar catalog.

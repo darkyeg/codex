@@ -107,8 +107,11 @@ use crate::turn_admission::TurnAdmission;
 
 const CONNECTION_RPC_DRAIN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);
 
-fn deserialize_client_request(request: JSONRPCRequest) -> Result<ClientRequest, JSONRPCErrorError> {
+fn deserialize_client_request(
+    mut request: JSONRPCRequest,
+) -> Result<ClientRequest, JSONRPCErrorError> {
     reject_obsolete_request_fields(&request)?;
+    crate::project_paths::normalize_local_wsl_roots(&mut request)?;
 
     ClientRequest::try_from(request)
         .map_err(|err| invalid_request(format!("Invalid request: {err}")))

@@ -1,11 +1,18 @@
 # WSL interoperability branch
 
-This branch is based on OpenAI's `rust-v0.153.3` tag. It is a local maintenance
-fork, not an official Codex release or a complete implementation of Desktop
-browser support in WSL.
+This branch is based on OpenAI's `main` at `1715e55076737158ba61d43158ede504de6d4ce1`
+(2026-09-13), with the local fixes carried forward from `rust-v0.153.3`. It is
+a maintenance fork, not an official Codex release or a complete implementation
+of Desktop browser support in WSL.
 
 ## Changes
 
+- Project create, import, and update accept Windows UNC roots for the current
+  WSL distribution before the native absolute-path decoder runs. Both `wsl$`
+  and `wsl.localhost` aliases map to Linux roots; a different distribution is
+  rejected. This fixes Desktop requests that previously failed with
+  `AbsolutePathBuf deserialized without a base path`. The app-server API
+  [documents the boundary](codex-rs/app-server/README.md#wsl-project-roots-maintenance-build).
 - Windows image attachment paths are translated with the distribution's
   `wslpath` before local image preparation. This also covers `view_image` when
   the selected executor is the local WSL environment.
@@ -17,8 +24,9 @@ browser support in WSL.
 - Native Linux servers, remote executors, and non-WSL hosts retain their
   existing path handling.
 
-The boundary conversion lives in `codex-rs/core/src/wsl_paths.rs`. It does not
-change the MCP wire schema, model confirmation policies, or approval decisions.
+The image/MCP boundary conversion lives in `codex-rs/core/src/wsl_paths.rs`;
+project input conversion lives in `codex-rs/app-server/src/project_paths.rs`.
+Neither changes the MCP wire schema, model confirmation policies, or approval decisions.
 
 ## Shared Windows/WSL configuration
 
@@ -35,6 +43,28 @@ Keep the native Windows helper on a Windows executable. Pointing its
 `CODEX_CLI_PATH` at an ELF binary or a Linux shell script cannot work.
 
 ## Validation
+
+### Project roots on the previous 0.153.3 base (2026-09-13)
+
+The installed pre-patch executable rejected both WSL UNC aliases with
+`Invalid request: AbsolutePathBuf deserialized without a base path`; the same
+request with a Linux root succeeded. The patched app server passed 12 selected
+tests, including the existing project persistence, import atomicity, assignment,
+fork, deletion, and validation scenarios:
+
+```sh
+just test -p codex-app-server --cargo-profile dev-small --test-threads 3 \
+  -E 'test(project_paths) | test(project_wsl_paths) | test(v2::projects)'
+```
+
+An isolated native WSL smoke check also passed create/retry through the two UNC
+aliases, import, update, metadata preservation, rejection of foreign distributions,
+duplicate aliases and relative paths, persistence across a server restart, and
+deletion without removing the project directory. This verifies server behavior;
+Desktop's sidebar still needs its normal project-creation flow. The server does
+not modify `.codex-global-state.json`.
+
+### Previous image and MCP fixes
 
 On a real NixOS WSL installation, 26 focused regression tests passed, covering
 image ingestion, `view_image`, Windows MCP metadata, unchanged remote/native
