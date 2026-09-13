@@ -14,6 +14,8 @@ use codex_app_server_protocol::ExperimentalFeatureListResponse;
 use codex_app_server_protocol::ExperimentalFeatureStage;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SkillsListParams;
+use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_config::LoaderOverrides;
@@ -391,6 +393,113 @@ async fn experimental_feature_enablement_set_empty_map_is_no_op() -> Result<()> 
         Some(&json!(true))
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn experimental_feature_enablement_set_preserves_skill_cache_for_no_ops() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let skill_dir = codex_home.path().join("skills/cache-probe");
+    std::fs::create_dir_all(&skill_dir)?;
+    let skill_file = skill_dir.join("SKILL.md");
+    std::fs::write(
+        &skill_file,
+        "---\nname: cache-probe\ndescription: Before\n---\n",
+    )?;
+    // No thread is started, so this fixture has no thread-owned filesystem watcher.
+    // Explicit runtime mutations and forceReload remain the cache refresh owners.
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    set_experimental_feature_enablement(
+        &mut mcp,
+        BTreeMap::from([("mentions_v2".to_string(), true)]),
+    )
+    .await?;
+    let params = SkillsListParams {
+        cwds: vec![cwd.path().to_path_buf()],
+        force_reload: false,
+    };
+    let id = mcp.send_skills_list_request(params.clone()).await?;
+    let before: SkillsListResponse = read_response(&mut mcp, id).await?;
+    assert!(
+        before.data[0]
+            .skills
+            .iter()
+            .any(|skill| { skill.name == "cache-probe" && skill.description == "Before" })
+    );
+    std::fs::write(
+        &skill_file,
+        "---\nname: cache-probe\ndescription: After\n---\n",
+    )?;
+    for enablement in [
+        BTreeMap::new(),
+        BTreeMap::from([("mentions_v2".to_string(), true)]),
+        BTreeMap::from([("unknown_feature".to_string(), true)]),
+    ] {
+        set_experimental_feature_enablement(&mut mcp, enablement).await?;
+        let id = mcp.send_skills_list_request(params.clone()).await?;
+        let after_no_op: SkillsListResponse = read_response(&mut mcp, id).await?;
+        assert_eq!(after_no_op, before);
+    }
+    set_experimental_feature_enablement(
+        &mut mcp,
+        BTreeMap::from([("mentions_v2".to_string(), false)]),
+    )
+    .await?;
+    let id = mcp.send_skills_list_request(params).await?;
+    let after_change: SkillsListResponse = read_response(&mut mcp, id).await?;
+    let mut expected = before;
+    expected.data[0]
+        .skills
+        .iter_mut()
+        .find(|skill| skill.name == "cache-probe")
+        .expect("cache probe skill")
+        .description = "After".to_string();
+    assert_eq!(after_change, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn experimental_feature_enablement_set_rejects_invalid_config_before_mutation() -> Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let config_path = codex_home.path().join("config.toml");
+    let valid_config = "[features]\nplugins = false\n";
+    std::fs::write(&config_path, valid_config)?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    set_experimental_feature_enablement(
+        &mut mcp,
+        BTreeMap::from([("mentions_v2".to_string(), true)]),
+    )
+    .await?;
+    std::fs::write(&config_path, "[invalid config")?;
+    let id = mcp
+        .send_experimental_feature_enablement_set_request(ExperimentalFeatureEnablementSetParams {
+            enablement: BTreeMap::from([("mentions_v2".to_string(), false)]),
+        })
+        .await?;
+    timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(id)),
+    )
+    .await??;
+    std::fs::write(&config_path, valid_config)?;
+    let ConfigReadResponse { config, .. } = read_config(&mut mcp, /*cwd*/ None).await?;
+    assert_eq!(
+        config
+            .additional
+            .get("features")
+            .and_then(|features| features.get("mentions_v2")),
+        Some(&json!(true)),
+    );
     Ok(())
 }
 

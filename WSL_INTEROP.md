@@ -48,6 +48,30 @@ establish the total Desktop conversation-open latency. The selected 57 API
 regressions passed, including catalog browsing, suggestions, policy restrictions,
 remote reconciliation, and plugin state merged across project scopes.
 
+## Runtime feature updates
+
+`experimentalFeature/enablement/set` retains plugin and skill caches when the
+stored override values do not change, including empty and unknown-only requests.
+Actual changes still invalidate both caches and refresh loaded tasks. Feature
+updates are serialized through the refresh so concurrent duplicates cannot
+acknowledge a change before the earlier request has applied it. Configuration is
+validated before mutating the override map; user and managed feature precedence
+continue to use the existing configuration machinery.
+
+The installed pre-fix runtime reproduced a warm `skills/list` request taking
+0.170 seconds, followed by an empty update making the same request take 15.379
+seconds. A separate temporary-home test reproduced cache replacement after an
+empty update without any filesystem watcher or running task. The regression
+checks empty, repeated, and unknown-only updates, real changes, and rejection of
+invalid configuration before mutation. All 24 selected feature, skill-cache, and
+WSL project API regressions passed.
+
+With compilation stopped, a sequential old/new API comparison reduced repeated
+feature-update plus skill loading from 14.747 to 2.825 seconds, retaining all 48
+skills. Initial combined tool startup remained 24.039 versus 28.109 seconds;
+this change does not establish an improvement to initial startup. Total Desktop
+loading latency must still be measured after installation and restart.
+
 ## Shared Windows/WSL configuration
 
 Both the WSL agent and native Windows tool helpers may load the same Codex

@@ -93,14 +93,16 @@ impl ConfigManager {
             .unwrap_or_default()
     }
 
-    pub(crate) fn extend_runtime_feature_enablement<I>(&self, enablement: I) -> Result<(), ()>
+    /// Update runtime overrides atomically and report whether their stored values changed.
+    pub(crate) fn extend_runtime_feature_enablement<I>(&self, enablement: I) -> Result<bool, ()>
     where
         I: IntoIterator<Item = (String, bool)>,
     {
         let mut runtime_feature_enablement =
             self.runtime_feature_enablement.write().map_err(|_| ())?;
+        let previous = runtime_feature_enablement.clone();
         runtime_feature_enablement.extend(enablement);
-        Ok(())
+        Ok(*runtime_feature_enablement != previous)
     }
 
     pub(crate) fn replace_cloud_config_bundle_loader(

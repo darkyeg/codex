@@ -82,6 +82,7 @@ pub(crate) struct ConfigRequestProcessor {
     config_manager: ConfigManager,
     thread_manager: Arc<ThreadManager>,
     analytics_events_client: AnalyticsEventsClient,
+    runtime_feature_update_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl ConfigRequestProcessor {
@@ -96,6 +97,7 @@ impl ConfigRequestProcessor {
             config_manager,
             thread_manager,
             analytics_events_client,
+            runtime_feature_update_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -181,10 +183,12 @@ impl ConfigRequestProcessor {
         request_id: ConnectionRequestId,
         params: ExperimentalFeatureEnablementSetParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        let response = self
-            .handle_config_mutation_result(self.set_experimental_feature_enablement(params).await)
-            .await?;
-        if !response.enablement.is_empty() {
+        // A repeated request must wait for an earlier update's session refresh
+        // before acknowledging that the requested state is already applied.
+        let _update_guard = self.runtime_feature_update_lock.lock().await;
+        let (response, changed) = self.set_experimental_feature_enablement(params).await?;
+        if changed {
+            self.handle_config_mutation().await;
             reload_user_config(&self.config_manager, &self.thread_manager).await;
         }
         self.outgoing
@@ -275,7 +279,7 @@ impl ConfigRequestProcessor {
     async fn set_experimental_feature_enablement(
         &self,
         params: ExperimentalFeatureEnablementSetParams,
-    ) -> Result<ExperimentalFeatureEnablementSetResponse, JSONRPCErrorError> {
+    ) -> Result<(ExperimentalFeatureEnablementSetResponse, bool), JSONRPCErrorError> {
         let ExperimentalFeatureEnablementSetParams { mut enablement } = params;
         let mut invalid_keys = Vec::new();
         enablement.retain(|key, _| {
@@ -292,30 +296,39 @@ impl ConfigRequestProcessor {
         }
 
         if enablement.is_empty() {
-            return Ok(ExperimentalFeatureEnablementSetResponse { enablement });
+            return Ok((
+                ExperimentalFeatureEnablementSetResponse { enablement },
+                false,
+            ));
         }
 
+        // Validate configuration before committing the in-memory update, so a
+        // failed load cannot leave an unapplied mutation that later looks like a no-op.
+        let mut config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         // Most runtime features are read later from config. Background migration is a one-shot
         // process-scoped task, so start it when runtime enablement first changes it to on.
         let feature = Feature::BackgroundPaginatedRolloutMigration;
         let should_start_background_rollout_migration = enablement
             .get(BACKGROUND_PAGINATED_ROLLOUT_MIGRATION_FEATURE)
             .is_some_and(|enabled| *enabled)
-            && !self
-                .load_latest_config(/*fallback_cwd*/ None)
-                .await?
-                .features
-                .enabled(feature);
+            && !config.features.enabled(feature);
 
-        self.config_manager
+        let changed = self
+            .config_manager
             .extend_runtime_feature_enablement(
                 enablement
                     .iter()
                     .map(|(name, enabled)| (name.clone(), *enabled)),
             )
             .map_err(|_| internal_error("failed to update feature enablement"))?;
+        if !changed {
+            return Ok((
+                ExperimentalFeatureEnablementSetResponse { enablement },
+                false,
+            ));
+        }
 
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        crate::config_manager::apply_runtime_feature_enablement(&mut config, &enablement);
         self.thread_manager
             .get_models_manager()
             .set_api_key_model_discovery_enabled(
@@ -325,7 +338,10 @@ impl ConfigRequestProcessor {
             self.thread_manager.start_background_rollout_migration();
         }
 
-        Ok(ExperimentalFeatureEnablementSetResponse { enablement })
+        Ok((
+            ExperimentalFeatureEnablementSetResponse { enablement },
+            true,
+        ))
     }
 
     async fn emit_plugin_toggle_events(
