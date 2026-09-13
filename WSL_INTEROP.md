@@ -44,6 +44,34 @@ Keep the native Windows helper on a Windows executable. Pointing its
 
 ## Validation
 
+### Latest main (2026-09-13)
+
+All 39 selected app-server/core regressions passed on upstream `1715e550` with
+both maintenance fixes applied. These cover project create/import/update and
+persistence, UNC alias admission and rejection, image paths, and local Windows
+MCP sandbox metadata. The initial combined run needed the repository's
+`test_stdio_server` fixture built explicitly; all 15 affected cases passed on
+rerun after building it.
+
+```sh
+cargo build --locked --profile dev-small -p codex-rmcp-client --bin test_stdio_server
+just test -p codex-app-server -p codex-core --cargo-profile dev-small \
+  -E 'test(project_paths) | test(project_wsl_paths) | test(v2::projects) | test(wsl_paths) | test(wsl_windows_image) | test(wsl_stdio_exe) | test(stdio_mcp_tool_call_includes_sandbox_state_meta) | test(view_image::view_image_routes_to_selected_local_environment)'
+```
+
+The latest standalone app server and complete CLI each passed the ten native WSL
+project smoke checks described below. The matching code-mode host passed its two
+native TCP/stdio integration tests for persistent values, delegated tools,
+notifications, cell control, and session closure. Main retains its upstream development version `0.0.0`;
+no release-version lockfile rewrite is applied.
+
+For the complete runtime build, use the repository's package builder or its
+`scripts/codex_package/v8.py` provisioning helper. Both `RUSTY_V8_ARCHIVE` and
+`RUSTY_V8_SRC_BINDING_PATH` must refer to the matching Codex-built sandbox V8
+artifacts verified against the repository's trusted checksum manifest. The
+crate's default denoland archive URL does not provide this sandbox artifact.
+Keep the code-mode host built from the same source as the CLI.
+
 ### Project roots on the previous 0.153.3 base (2026-09-13)
 
 The installed pre-patch executable rejected both WSL UNC aliases with
@@ -89,8 +117,8 @@ Run tests with an isolated `CODEX_HOME`, without an inherited
 `CODEX_SQLITE_HOME` or API credentials. On NixOS, sandbox child processes need
 their runtime libraries in the executable's RPATH; an inherited
 `LD_LIBRARY_PATH` alone is insufficient. The source release's Cargo lockfile
-also needs its workspace package versions synchronized to `0.153.3`; this
-does not update external dependencies.
+needed its workspace package versions synchronized to `0.153.3`; that historical
+release adjustment does not apply to the current main-based branch.
 
 ## Desktop browser limitation
 
